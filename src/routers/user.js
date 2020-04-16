@@ -1,27 +1,17 @@
 const express = require('express')
 const User = require('../models/user')
 const auth = require('../middleware/auth')
-const multer = require('multer')
-const router = new express.Router()
+const sharp = require('sharp');
+const upload = require('../middleware/upload')
+const router = new express.Router();
+const {sendWelcomeEmail,sendCancelationEmail} = require('../emails/account')
 
 
-// Especifiando objeto a ser upado
-const upload = multer({
-    limits:{
-        fileSize:1000000,
-    },
-    fileFilter(req,file,callback){
-        if(!file.originalname.match(/\.(png|jpg|jpge)$/)){
-             return callback(new Error(" You should upload a jpg,jpge or a png file "))
-        }
-        callback(undefined,true)
-    }
-})
 
-router.post('/users/me/avatar',upload.single('avatar'),async (req,res)=>{
-    req.user.avatar=req.file.buffer;
-    await req.user.save.save();
-
+router.post('/users/me/avatar',auth,upload.single('avatar'),async (req,res)=>{
+  const buffer = await sharp(req.file.buffer).resize({width:250,height:250}).png().toBuffer();
+    req.user.avatar=buffer;
+    await req.user.save();
     res.send('')
 },(error,req,res,next)=>{
 
@@ -29,13 +19,37 @@ router.post('/users/me/avatar',upload.single('avatar'),async (req,res)=>{
 
 })
 
+router.delete('/users/me/avatar',auth,async(req,res)=>{
+   req.user.avatar = undefined;
+   await req.user.save();
+   res.send('deleted');
+})
+router.get('/users/:id/avatar',async(req,res)=>{
+
+    try{
+
+        const user = await User.findById(req.params.id)
+        if(!user.avatar || !user){
+
+            throw new Error("can't find avatar");
+        }
+
+        res.set('Content-Type','image/png');
+        res.send(user.avatar)
+
+    }catch(e){
+        res.status(404).send(e);
+    }
+})
+
+
 router.post('/users', async (req, res) => {
     const user = new User(req.body)
 
     try {
         await user.save()
-        const token = await user.generateAuthToken()
-        res.status(201).send({ user, token })
+        sendWelcomeEmail(req.body.email,req.body.name)
+        res.status(201).send({user})
     } catch (e) {
         res.status(400).send(e)
     }
@@ -102,10 +116,12 @@ router.patch('/users/me', auth, async (req, res) => {
 router.delete('/users/me', auth, async (req, res) => {
     try {
         await req.user.remove()
+        sendCancelationEmail(req.user.email,req.user.name)
         res.send(req.user)
     } catch (e) {
         res.status(500).send()
     }
 })
+
 
 module.exports = router
